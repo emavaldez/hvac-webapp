@@ -78,7 +78,7 @@
             gap: 0.75rem;
         }
         .message {
-            max-width: 80%;
+            max-width: 85%;
             padding: 0.75rem 1rem;
             border-radius: 12px;
             font-size: 0.95rem;
@@ -122,6 +122,20 @@
             font-family: "SF Mono", Monaco, monospace;
             font-size: 0.85em;
         }
+        .message a {
+            color: var(--accent);
+            text-decoration: underline;
+        }
+        .message .attachment-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.3rem;
+            background: rgba(255,255,255,0.1);
+            padding: 0.2rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            margin-top: 0.3rem;
+        }
         .typing-indicator {
             align-self: flex-start;
             padding: 0.75rem 1rem;
@@ -147,9 +161,34 @@
             padding: 0.75rem 1rem;
             background: var(--surface);
             border-top: 1px solid var(--border);
+            flex-shrink: 0;
+        }
+        .file-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.4rem;
+            margin-bottom: 0.5rem;
+        }
+        .file-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.3rem;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 0.3rem 0.5rem;
+            font-size: 0.8rem;
+            color: var(--text-muted);
+        }
+        .file-chip .remove {
+            cursor: pointer;
+            color: var(--error);
+            font-weight: bold;
+        }
+        .composer-row {
             display: flex;
             gap: 0.5rem;
-            flex-shrink: 0;
+            align-items: flex-end;
         }
         .composer textarea {
             flex: 1;
@@ -167,7 +206,22 @@
             transition: border-color 0.2s;
         }
         .composer textarea:focus { border-color: var(--accent); }
-        .composer button {
+        .btn-attach {
+            padding: 0.55rem 0.7rem;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text-muted);
+            cursor: pointer;
+            font-size: 1.2rem;
+            transition: all 0.2s;
+            flex-shrink: 0;
+        }
+        .btn-attach:hover {
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+        .composer button.send-btn {
             padding: 0.7rem 1.2rem;
             background: var(--accent);
             color: #fff;
@@ -178,9 +232,10 @@
             cursor: pointer;
             transition: background 0.2s;
             white-space: nowrap;
+            flex-shrink: 0;
         }
-        .composer button:hover { background: #3a8eef; }
-        .composer button:disabled { opacity: 0.5; cursor: not-allowed; }
+        .composer button.send-btn:hover { background: #3a8eef; }
+        .composer button.send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
         /* Scrollbar */
         ::-webkit-scrollbar { width: 6px; }
         ::-webkit-scrollbar-track { background: transparent; }
@@ -192,6 +247,7 @@
             padding: 3rem 1rem;
             font-size: 0.9rem;
         }
+        #fileInput { display: none; }
     </style>
 </head>
 <body>
@@ -214,8 +270,13 @@
         <span></span><span></span><span></span>
     </div>
     <div class="composer">
-        <textarea id="msgInput" placeholder="Escribí tu mensaje..." rows="1"></textarea>
-        <button id="btnSend">Enviar</button>
+        <div class="file-list" id="fileList"></div>
+        <div class="composer-row">
+            <input type="file" id="fileInput" multiple>
+            <button class="btn-attach" id="btnAttach" title="Adjuntar archivos">📎</button>
+            <textarea id="msgInput" placeholder="Escribí tu mensaje..." rows="1"></textarea>
+            <button class="send-btn" id="btnSend">Enviar</button>
+        </div>
     </div>
     <script>
         const chatArea = document.getElementById('chatArea');
@@ -223,10 +284,14 @@
         const btnSend = document.getElementById('btnSend');
         const btnClear = document.getElementById('btnClear');
         const btnLogout = document.getElementById('btnLogout');
+        const btnAttach = document.getElementById('btnAttach');
+        const fileInput = document.getElementById('fileInput');
+        const fileList = document.getElementById('fileList');
         const typing = document.getElementById('typing');
         const emptyState = document.getElementById('emptyState');
 
         let sending = false;
+        let selectedFiles = [];
 
         // Auto-resize textarea
         msgInput.addEventListener('input', () => {
@@ -257,6 +322,33 @@
             emptyState.style.display = 'block';
         });
 
+        // File attachment
+        btnAttach.addEventListener('click', () => fileInput.click());
+        fileInput.addEventListener('change', (e) => {
+            for (const f of e.target.files) {
+                selectedFiles.push(f);
+            }
+            renderFileList();
+            fileInput.value = '';
+        });
+
+        function renderFileList() {
+            fileList.innerHTML = '';
+            selectedFiles.forEach((f, i) => {
+                const chip = document.createElement('div');
+                chip.className = 'file-chip';
+                chip.innerHTML = `📎 ${f.name} <span class="remove" data-idx="${i}">✕</span>`;
+                fileList.appendChild(chip);
+            });
+            fileList.querySelectorAll('.remove').forEach(el => {
+                el.addEventListener('click', (e) => {
+                    const idx = parseInt(e.target.dataset.idx);
+                    selectedFiles.splice(idx, 1);
+                    renderFileList();
+                });
+            });
+        }
+
         function escapeHtml(text) {
             const div = document.createElement('div');
             div.textContent = text;
@@ -264,7 +356,6 @@
         }
 
         function renderMarkdown(text) {
-            // Basic markdown: code blocks, inline code, bold
             let html = escapeHtml(text);
             // Code blocks
             html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, (m, lang, code) => {
@@ -274,10 +365,12 @@
             html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
             // Bold
             html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+            // Links
+            html = html.replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank">$1</a>');
             return html;
         }
 
-        function addMessage(role, content, isError = false) {
+        function addMessage(role, content, isError, attachments) {
             if (emptyState.style.display !== 'none') {
                 emptyState.style.display = 'none';
             }
@@ -288,29 +381,54 @@
             } else {
                 msg.textContent = content;
             }
+            // Show attachment chips
+            if (attachments && attachments.length > 0) {
+                attachments.forEach(att => {
+                    const chip = document.createElement('div');
+                    chip.className = 'attachment-chip';
+                    chip.textContent = `📎 ${att.filename} (${formatSize(att.size)})`;
+                    msg.appendChild(chip);
+                });
+            }
             chatArea.appendChild(msg);
             chatArea.scrollTop = chatArea.scrollHeight;
             return msg;
         }
 
+        function formatSize(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1048576) return (bytes/1024).toFixed(1) + ' KB';
+            return (bytes/1048576).toFixed(1) + ' MB';
+        }
+
         async function sendMessage() {
             const text = msgInput.value.trim();
-            if (!text || sending) return;
+            if ((!text && selectedFiles.length === 0) || sending) return;
 
             sending = true;
             btnSend.disabled = true;
+
+            // Show user message with file chips
+            const attInfo = selectedFiles.map(f => ({filename: f.name, size: f.size}));
+            addMessage('user', text || '(archivo adjunto)', false, attInfo);
+
+            // Build form data
+            const formData = new FormData();
+            formData.append('message', text);
+            selectedFiles.forEach(f => formData.append('files', f));
+
             msgInput.value = '';
             msgInput.style.height = 'auto';
+            selectedFiles = [];
+            renderFileList();
 
-            addMessage('user', text);
             typing.classList.add('show');
             chatArea.scrollTop = chatArea.scrollHeight;
 
             try {
                 const resp = await fetch('/api/chat', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ message: text }),
+                    body: formData,
                 });
 
                 typing.classList.remove('show');
@@ -340,7 +458,12 @@
                 const data = await resp.json();
                 if (data.messages && data.messages.length > 0) {
                     data.messages.forEach(m => {
-                        addMessage(m.role === 'assistant' ? 'bot' : 'user', m.content);
+                        addMessage(
+                            m.role === 'assistant' ? 'bot' : 'user',
+                            m.content,
+                            false,
+                            m.attachments || []
+                        );
                     });
                 }
             } catch (e) {}

@@ -1,6 +1,7 @@
 """
 SQLite database for chat sessions.
 Each user gets their own conversation history.
+Supports file attachments in messages.
 """
 import sqlite3
 import time
@@ -23,9 +24,15 @@ def init_db():
             username TEXT NOT NULL,
             role TEXT NOT NULL,
             content TEXT NOT NULL,
-            timestamp REAL NOT NULL
+            timestamp REAL NOT NULL,
+            attachments TEXT DEFAULT '[]'
         )
     """)
+    # Add attachments column if it doesn't exist (migration for old DBs)
+    try:
+        conn.execute("ALTER TABLE messages ADD COLUMN attachments TEXT DEFAULT '[]'")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
     conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_messages_user
         ON messages(username, id)
@@ -34,12 +41,12 @@ def init_db():
     conn.close()
 
 
-def save_message(username: str, role: str, content: str):
+def save_message(username: str, role: str, content: str, attachments: str = "[]"):
     """Save a message to the user's conversation."""
     conn = sqlite3.connect(_get_db_path())
     conn.execute(
-        "INSERT INTO messages (username, role, content, timestamp) VALUES (?, ?, ?, ?)",
-        (username, role, content, time.time()),
+        "INSERT INTO messages (username, role, content, timestamp, attachments) VALUES (?, ?, ?, ?, ?)",
+        (username, role, content, time.time(), attachments),
     )
     conn.commit()
     conn.close()
@@ -49,12 +56,20 @@ def get_history(username: str, limit: int = 50) -> list:
     """Get conversation history for a user."""
     conn = sqlite3.connect(_get_db_path())
     rows = conn.execute(
-        "SELECT role, content, timestamp FROM messages WHERE username = ? ORDER BY id DESC LIMIT ?",
+        "SELECT role, content, timestamp, attachments FROM messages WHERE username = ? ORDER BY id DESC LIMIT ?",
         (username, limit),
     ).fetchall()
     conn.close()
     # Reverse to chronological order
-    return [{"role": r[0], "content": r[1], "timestamp": r[2]} for r in reversed(rows)]
+    result = []
+    for r in reversed(rows):
+        import json
+        try:
+            atts = json.loads(r[3]) if r[3] else []
+        except (json.JSONDecodeError, IndexError):
+            atts = []
+        result.append({"role": r[0], "content": r[1], "timestamp": r[2], "attachments": atts})
+    return result
 
 
 def clear_history(username: str):

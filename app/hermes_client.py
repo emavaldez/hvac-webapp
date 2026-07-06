@@ -1,9 +1,11 @@
 """
 Hermes API client — talks to the Hermes Gateway API Server.
 Uses the OpenAI-compatible /v1/chat/completions endpoint.
+Supports file attachments via multipart content.
 """
 import httpx
 import json
+import base64
 from typing import Tuple, Optional
 from config import settings
 
@@ -20,6 +22,83 @@ async def send_message(
     for h in history:
         messages.append({"role": h["role"], "content": h["content"]})
     messages.append({"role": "user", "content": message})
+
+    headers = {
+        "Authorization": f"Bearer {settings.HERMES_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    body = {
+        "model": settings.HERMES_MODEL,
+        "messages": messages,
+        "stream": False,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.post(
+                f"{settings.HERMES_API_URL}/chat/completions",
+                headers=headers,
+                json=body,
+            )
+
+        if resp.status_code == 401:
+            return "", "Error de autenticación con el agente"
+        if resp.status_code == 429:
+            return "", "El agente está saturado, probá en un momento"
+        if resp.status_code >= 500:
+            return "", "El agente no está disponible ahora"
+
+        data = resp.json()
+        content = data["choices"][0]["message"]["content"]
+        return content, None
+
+    except httpx.TimeoutException:
+        return "", "El agente tardó demasiado en responder"
+    except httpx.ConnectError:
+        return "", "No se pudo conectar con el agente"
+    except (KeyError, json.JSONDecodeError):
+        return "", "Respuesta inválida del agente"
+
+
+async def send_message_with_files(
+    message: str,
+    history: list,
+    files: list,
+    timeout: int = 120,
+) -> Tuple[str, Optional[str]]:
+    """
+    Send a message with file attachments to Hermes.
+    files: list of dicts with {filename, content (bytes), content_type}
+    """
+    # Build user message content as multipart (text + images/files)
+    user_content = []
+
+    # Add text message
+    if message:
+        user_content.append({"type": "text", "text": message})
+
+    # Add files as base64
+    for f in files:
+        b64 = base64.b64encode(f["content"]).decode()
+        if f["content_type"].startswith("image/"):
+            user_content.append({
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:{f['content_type']};base64,{b64}"
+                }
+            })
+        else:
+            # Non-image files: encode as text with filename info
+            user_content.append({
+                "type": "text",
+                "text": f"[Archivo adjunto: {f['filename']} ({f['content_type']}, {len(f['content'])} bytes)]"
+            })
+
+    # Build messages
+    messages = []
+    for h in history:
+        messages.append({"role": h["role"], "content": h["content"]})
+    messages.append({"role": "user", "content": user_content})
 
     headers = {
         "Authorization": f"Bearer {settings.HERMES_API_KEY}",
