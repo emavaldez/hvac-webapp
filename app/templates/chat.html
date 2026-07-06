@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HVAC — Asistente</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root {
+            --bg: #0f1117;
+            --surface: #1a1d27;
+            --border: #2a2d3a;
+            --text: #e0e0e0;
+            --text-muted: #6b7280;
+            --accent: #4a9eff;
+            --user-bubble: #2563eb;
+            --bot-bubble: #1a1d27;
+            --error: #ef4444;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            height: 100dvh;
+        }
+        /* Header */
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0.75rem 1rem;
+            background: var(--surface);
+            border-bottom: 1px solid var(--border);
+            flex-shrink: 0;
+        }
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .header h1 {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: var(--accent);
+        }
+        .header .user-name {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+        }
+        .header-actions {
+            display: flex;
+            gap: 0.5rem;
+        }
+        .btn-small {
+            padding: 0.4rem 0.7rem;
+            background: transparent;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text-muted);
+            font-size: 0.8rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .btn-small:hover {
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+        /* Chat area */
+        .chat-area {
+            flex: 1;
+            overflow-y: auto;
+            padding: 1rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+        }
+        .message {
+            max-width: 80%;
+            padding: 0.75rem 1rem;
+            border-radius: 12px;
+            font-size: 0.95rem;
+            line-height: 1.5;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        .message.user {
+            align-self: flex-end;
+            background: var(--user-bubble);
+            color: #fff;
+            border-bottom-right-radius: 4px;
+        }
+        .message.bot {
+            align-self: flex-start;
+            background: var(--bot-bubble);
+            border: 1px solid var(--border);
+            border-bottom-left-radius: 4px;
+        }
+        .message.error {
+            align-self: center;
+            background: transparent;
+            border: 1px solid var(--error);
+            color: var(--error);
+            font-size: 0.85rem;
+            max-width: 90%;
+        }
+        .message code {
+            background: rgba(0,0,0,0.3);
+            padding: 0.1rem 0.3rem;
+            border-radius: 3px;
+            font-family: "SF Mono", Monaco, monospace;
+            font-size: 0.85em;
+        }
+        .message pre {
+            background: rgba(0,0,0,0.3);
+            padding: 0.75rem;
+            border-radius: 6px;
+            overflow-x: auto;
+            margin: 0.5rem 0;
+            font-family: "SF Mono", Monaco, monospace;
+            font-size: 0.85em;
+        }
+        .typing-indicator {
+            align-self: flex-start;
+            padding: 0.75rem 1rem;
+            color: var(--text-muted);
+            font-size: 0.9rem;
+            display: none;
+        }
+        .typing-indicator.show { display: flex; gap: 4px; align-items: center; }
+        .typing-indicator span {
+            width: 8px; height: 8px;
+            background: var(--text-muted);
+            border-radius: 50%;
+            animation: bounce 1.4s infinite;
+        }
+        .typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
+        .typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
+        @keyframes bounce {
+            0%, 60%, 100% { transform: translateY(0); }
+            30% { transform: translateY(-6px); }
+        }
+        /* Composer */
+        .composer {
+            padding: 0.75rem 1rem;
+            background: var(--surface);
+            border-top: 1px solid var(--border);
+            display: flex;
+            gap: 0.5rem;
+            flex-shrink: 0;
+        }
+        .composer textarea {
+            flex: 1;
+            padding: 0.7rem 0.9rem;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text);
+            font-size: 0.95rem;
+            resize: none;
+            outline: none;
+            max-height: 120px;
+            min-height: 44px;
+            font-family: inherit;
+            transition: border-color 0.2s;
+        }
+        .composer textarea:focus { border-color: var(--accent); }
+        .composer button {
+            padding: 0.7rem 1.2rem;
+            background: var(--accent);
+            color: #fff;
+            border: none;
+            border-radius: 8px;
+            font-size: 0.95rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background 0.2s;
+            white-space: nowrap;
+        }
+        .composer button:hover { background: #3a8eef; }
+        .composer button:disabled { opacity: 0.5; cursor: not-allowed; }
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+        /* Empty state */
+        .empty-state {
+            text-align: center;
+            color: var(--text-muted);
+            padding: 3rem 1rem;
+            font-size: 0.9rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-left">
+            <h1>HVAC</h1>
+            <span class="user-name">· {{USER_NAME}}</span>
+        </div>
+        <div class="header-actions">
+            <button class="btn-small" id="btnClear" title="Limpiar conversación">Limpiar</button>
+            <button class="btn-small" id="btnLogout" title="Cerrar sesión">Salir</button>
+        </div>
+    </div>
+    <div class="chat-area" id="chatArea">
+        <div class="empty-state" id="emptyState">
+            Escribí tu consulta sobre cotizaciones HVAC abajo.
+        </div>
+    </div>
+    <div class="typing-indicator" id="typing">
+        <span></span><span></span><span></span>
+    </div>
+    <div class="composer">
+        <textarea id="msgInput" placeholder="Escribí tu mensaje..." rows="1"></textarea>
+        <button id="btnSend">Enviar</button>
+    </div>
+    <script>
+        const chatArea = document.getElementById('chatArea');
+        const msgInput = document.getElementById('msgInput');
+        const btnSend = document.getElementById('btnSend');
+        const btnClear = document.getElementById('btnClear');
+        const btnLogout = document.getElementById('btnLogout');
+        const typing = document.getElementById('typing');
+        const emptyState = document.getElementById('emptyState');
+
+        let sending = false;
+
+        // Auto-resize textarea
+        msgInput.addEventListener('input', () => {
+            msgInput.style.height = 'auto';
+            msgInput.style.height = Math.min(msgInput.scrollHeight, 120) + 'px';
+        });
+
+        // Enter to send (Shift+Enter for newline)
+        msgInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+        });
+
+        btnSend.addEventListener('click', sendMessage);
+
+        btnLogout.addEventListener('click', async () => {
+            await fetch('/api/logout', { method: 'POST' });
+            window.location.href = '/login';
+        });
+
+        btnClear.addEventListener('click', async () => {
+            if (!confirm('¿Limpiar toda la conversación?')) return;
+            await fetch('/api/clear', { method: 'POST' });
+            chatArea.innerHTML = '';
+            chatArea.appendChild(emptyState);
+            emptyState.style.display = 'block';
+        });
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function renderMarkdown(text) {
+            // Basic markdown: code blocks, inline code, bold
+            let html = escapeHtml(text);
+            // Code blocks
+            html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, (m, lang, code) => {
+                return `<pre>${code.trim()}</pre>`;
+            });
+            // Inline code
+            html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+            // Bold
+            html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+            return html;
+        }
+
+        function addMessage(role, content, isError = false) {
+            if (emptyState.style.display !== 'none') {
+                emptyState.style.display = 'none';
+            }
+            const msg = document.createElement('div');
+            msg.className = `message ${isError ? 'error' : role}`;
+            if (role === 'bot' && !isError) {
+                msg.innerHTML = renderMarkdown(content);
+            } else {
+                msg.textContent = content;
+            }
+            chatArea.appendChild(msg);
+            chatArea.scrollTop = chatArea.scrollHeight;
+            return msg;
+        }
+
+        async function sendMessage() {
+            const text = msgInput.value.trim();
+            if (!text || sending) return;
+
+            sending = true;
+            btnSend.disabled = true;
+            msgInput.value = '';
+            msgInput.style.height = 'auto';
+
+            addMessage('user', text);
+            typing.classList.add('show');
+            chatArea.scrollTop = chatArea.scrollHeight;
+
+            try {
+                const resp = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message: text }),
+                });
+
+                typing.classList.remove('show');
+
+                if (!resp.ok) {
+                    const data = await resp.json().catch(() => ({}));
+                    addMessage('bot', data.detail || 'Error al enviar mensaje', true);
+                } else {
+                    const data = await resp.json();
+                    addMessage('bot', data.response);
+                }
+            } catch (err) {
+                typing.classList.remove('show');
+                addMessage('bot', 'Error de conexión', true);
+            }
+
+            sending = false;
+            btnSend.disabled = false;
+            msgInput.focus();
+        }
+
+        // Load history on page load
+        (async () => {
+            try {
+                const resp = await fetch('/api/history');
+                if (!resp.ok) return;
+                const data = await resp.json();
+                if (data.messages && data.messages.length > 0) {
+                    data.messages.forEach(m => {
+                        addMessage(m.role === 'assistant' ? 'bot' : 'user', m.content);
+                    });
+                }
+            } catch (e) {}
+        })();
+    </script>
+</body>
+</html>
