@@ -25,6 +25,9 @@ from hermes_client import send_message, send_message_with_files, download_file_f
 
 app = FastAPI(title="HVAC Web App")
 
+# In-memory store for file transfers from Hermes pod
+_transfer_store: dict = {}
+
 # Init DB on startup
 init_db()
 
@@ -223,6 +226,25 @@ async def download_file(
 @app.get("/api/health")
 async def health():
     return {"status": "ok"}
+
+
+@app.post("/api/transfer")
+async def receive_transfer(
+    request: Request,
+    file: UploadFile = File(...),
+    transfer_id: str = Form(...),
+):
+    """Receive a file upload from the Hermes pod (via curl)."""
+    key = request.headers.get("X-Transfer-Key", "")
+    if key != transfer_id:
+        raise HTTPException(status_code=403, detail="Transfer key mismatch")
+
+    content = await file.read()
+    _transfer_store[transfer_id] = {
+        "content": content,
+        "filename": file.filename or "unknown",
+    }
+    return {"ok": True, "size": len(content)}
 
 
 if __name__ == "__main__":

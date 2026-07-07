@@ -6,6 +6,7 @@ Supports file download via base64 encoding.
 """
 import httpx
 import json
+import os
 import base64
 import re
 from pathlib import Path
@@ -82,16 +83,19 @@ async def download_file_from_hermes(
 ) -> Tuple[Optional[bytes], Optional[str], Optional[str]]:
     """
     Download a file from the Hermes pod.
-    Strategy: ask the agent to start a temp HTTP server, get the pod IP,
-    then download the file directly (bypassing the LLM for the actual file transfer).
+    Strategy: ask the agent to run a command that uploads the file
+    to a temporary endpoint on the web app via curl.
     Returns (content_bytes, filename, error_message).
     """
-    import asyncio
+    import uuid
 
     headers = {
         "Authorization": f"Bearer {settings.HERMES_API_KEY}",
         "Content-Type": "application/json",
     }
+
+    # Generate a unique transfer ID
+    transfer_id = str(uuid.uuid4())[:8]
 
     async def ask_hermes(prompt: str) -> Optional[str]:
         body = {
@@ -113,48 +117,41 @@ async def download_file_from_hermes(
         except Exception:
             return None
 
-    # Step 1: Ask Hermes to start a temp HTTP server and return the pod IP
-    dir_path = str(Path(file_path).parent)
     filename = Path(file_path).name
 
+    # Ask Hermes to upload the file via curl to our temp endpoint
+    # The web app needs to be accessible from the Hermes pod
+    # We use the web app's public URL
+    webapp_url = os.getenv("WEBAPP_PUBLIC_URL", "https://hvac-webapp-manejamelo-prod.apps.nan.builders")
+
     resp1 = await ask_hermes(
-        f"Ejecutá estos dos comandos en la terminal y pegame los outputs:\n"
-        f"1) cd \"{dir_path}\" && nohup python3 -m http.server 9876 > /dev/null 2>&1 &\n"
-        f"2) hostname -i\n"
-        f"Pegame SOLO la IP que devuelve hostname -i, nada más."
+        f"Ejecutá este comando en la terminal para subir un archivo:\n\n"
+        f'curl -s -X POST -F "file=@{file_path}" -F "transfer_id={transfer_id}" '
+        f'"{webapp_url}/api/transfer" -H "X-Transfer-Key: {transfer_id}"\n\n'
+        f"Pegame el output del curl."
     )
 
     if not resp1:
         return None, None, "El agente no respondió"
 
-    # Extract IP from response
-    ip_match = re.search(r"\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b", resp1)
-    if not ip_match:
-        return None, None, "No se pudo obtener la IP del pod"
+    # The file should now be available in our temp store
+    # Check if the transfer endpoint received it
+    # (The /api/transfer endpoint stores the file in memory keyed by transfer_id)
+    # We retrieve it from the in-memory store
+    from main import _transfer_store
+    import asyncio
 
-    pod_ip = ip_match.group(1)
+    # Wait a bit for the transfer to complete (the curl might still be running)
+    for _ in range(10):
+        if transfer_id in _transfer_store:
+            break
+        await asyncio.sleep(2)
 
-    # Step 2: Download the file directly from the pod's HTTP server
-    download_url = f"http://{pod_ip}:9876/{filename}"
-    try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.get(download_url)
+    if transfer_id not in _transfer_store:
+        return None, None, "El agente no pudo subir el archivo"
 
-        if resp.status_code != 200:
-            # Cleanup before returning error
-            asyncio.create_task(ask_hermes("Ejecutá: pkill -f 'http.server 9876'"))
-            return None, None, f"Error {resp.status_code} al descargar del pod"
-
-        file_bytes = resp.content
-
-        # Step 3: Kill the HTTP server (best effort)
-        asyncio.create_task(ask_hermes("Ejecutá: pkill -f 'http.server 9876'"))
-
-        return file_bytes, filename, None
-
-    except Exception as e:
-        asyncio.create_task(ask_hermes("Ejecutá: pkill -f 'http.server 9876'"))
-        return None, None, f"No se pudo descargar: {str(e)}"
+    file_data = _transfer_store.pop(transfer_id)
+    return file_data["content"], file_data["filename"], None
 
 
 async def send_message_with_files(
