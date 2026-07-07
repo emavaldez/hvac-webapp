@@ -81,69 +81,80 @@ async def download_file_from_hermes(
     file_path: str, timeout: int = 120
 ) -> Tuple[Optional[bytes], Optional[str], Optional[str]]:
     """
-    Ask Hermes to read a file and return it base64-encoded.
-    Uses the agent's terminal tool to run base64 command directly.
+    Download a file from the Hermes pod.
+    Strategy: ask the agent to start a temp HTTP server, get the pod IP,
+    then download the file directly (bypassing the LLM for the actual file transfer).
     Returns (content_bytes, filename, error_message).
     """
+    import asyncio
+
     headers = {
         "Authorization": f"Bearer {settings.HERMES_API_KEY}",
         "Content-Type": "application/json",
     }
-    body = {
-        "model": settings.HERMES_MODEL,
-        "messages": [
-            {
-                "role": "user",
-                "content": (
-                    f"Necesito que leas el archivo binario {file_path} y me devuelvas su contenido "
-                    f"codificado en base64. Usá la herramienta terminal para ejecutar este comando "
-                    f"y pegame el output completo:\n\n"
-                    f"base64 \"{file_path}\"\n\n"
-                    f"Si el archivo no existe, decime 'FILE_NOT_FOUND'. "
-                    f"Pegame SOLO el output del comando base64, sin texto adicional."
-                ),
-            }
-        ],
-        "stream": False,
-    }
 
+    async def ask_hermes(prompt: str) -> Optional[str]:
+        body = {
+            "model": settings.HERMES_MODEL,
+            "messages": [{"role": "user", "content": prompt}],
+            "stream": False,
+        }
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                resp = await client.post(
+                    f"{settings.HERMES_API_URL}/chat/completions",
+                    headers=headers,
+                    json=body,
+                )
+            if resp.status_code != 200:
+                return None
+            data = resp.json()
+            return data["choices"][0]["message"]["content"].strip()
+        except Exception:
+            return None
+
+    # Step 1: Ask Hermes to start a temp HTTP server and return the pod IP
+    dir_path = str(Path(file_path).parent)
+    filename = Path(file_path).name
+
+    resp1 = await ask_hermes(
+        f"Ejecutá estos dos comandos en la terminal y pegame los outputs:\n"
+        f"1) cd \"{dir_path}\" && nohup python3 -m http.server 9876 > /dev/null 2>&1 &\n"
+        f"2) hostname -i\n"
+        f"Pegame SOLO la IP que devuelve hostname -i, nada más."
+    )
+
+    if not resp1:
+        return None, None, "El agente no respondió"
+
+    # Extract IP from response
+    ip_match = re.search(r"\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b", resp1)
+    if not ip_match:
+        return None, None, "No se pudo obtener la IP del pod"
+
+    pod_ip = ip_match.group(1)
+
+    # Step 2: Download the file directly from the pod's HTTP server
+    download_url = f"http://{pod_ip}:9876/{filename}"
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.post(
-                f"{settings.HERMES_API_URL}/chat/completions",
-                headers=headers,
-                json=body,
-            )
+            resp = await client.get(download_url)
 
         if resp.status_code != 200:
-            return None, None, f"Error {resp.status_code} del agente"
+            # Cleanup before returning error
+            asyncio.create_task(ask_hermes("Ejecutá: pkill -f 'http.server 9876'"))
+            return None, None, f"Error {resp.status_code} al descargar del pod"
 
-        data = resp.json()
-        content = data["choices"][0]["message"]["content"].strip()
+        file_bytes = resp.content
 
-        if "FILE_NOT_FOUND" in content:
-            return None, None, "Archivo no encontrado en el agente"
+        # Step 3: Kill the HTTP server (best effort)
+        asyncio.create_task(ask_hermes("Ejecutá: pkill -f 'http.server 9876'"))
 
-        # Strip markdown code fences if present
-        if content.startswith("```"):
-            content = re.sub(r"^```\w*\n?", "", content)
-            content = re.sub(r"\n?```$", "", content)
-            content = content.strip()
-
-        # Remove any leading/trailing non-base64 text
-        # base64 only contains A-Za-z0-9+/=
-        lines = content.split("\n")
-        b64_lines = [l.strip() for l in lines if re.match(r"^[A-Za-z0-9+/=\s]+$", l.strip())]
-        if b64_lines:
-            content = "".join(b64_lines)
-
-        # Decode base64
-        file_bytes = base64.b64decode(content)
-        filename = Path(file_path).name
         return file_bytes, filename, None
 
     except Exception as e:
-        return None, None, f"No se pudo descargar el archivo: {str(e)}"
+        asyncio.create_task(ask_hermes("Ejecutá: pkill -f 'http.server 9876'"))
+        return None, None, f"No se pudo descargar: {str(e)}"
 
 
 async def send_message_with_files(
