@@ -126,6 +126,28 @@
             color: var(--accent);
             text-decoration: underline;
         }
+        .dl-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.3rem;
+            background: rgba(74, 158, 255, 0.15);
+            border: 1px solid var(--accent);
+            color: var(--accent);
+            padding: 0.3rem 0.7rem;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            cursor: pointer;
+            margin: 0.2rem 0;
+            transition: all 0.2s;
+        }
+        .dl-btn:hover {
+            background: var(--accent);
+            color: #fff;
+        }
+        .dl-btn:disabled {
+            opacity: 0.5;
+            cursor: wait;
+        }
         .message .attachment-chip {
             display: inline-flex;
             align-items: center;
@@ -367,6 +389,14 @@
             html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
             // Links
             html = html.replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank">$1</a>');
+            // File paths → download buttons
+            html = html.replace(
+                /(?:^|\s)(\/[\w\-./]+\.(?:xlsx|xls|csv|pdf|docx|doc|pptx|ppt|txt|json|yaml|yml|zip|png|jpg|jpeg|gif))/gi,
+                (match, path) => {
+                    const encoded = encodeURIComponent(path);
+                    return ` <button class="dl-btn" onclick="downloadFile('${path}')">⬇ ${path.split('/').pop()}</button>`;
+                }
+            );
             return html;
         }
 
@@ -399,6 +429,50 @@
             if (bytes < 1024) return bytes + ' B';
             if (bytes < 1048576) return (bytes/1024).toFixed(1) + ' KB';
             return (bytes/1048576).toFixed(1) + ' MB';
+        }
+
+        async function downloadFile(filePath) {
+            const btn = event.target.closest('.dl-btn');
+            if (btn) {
+                btn.disabled = true;
+                btn.textContent = '⏳ Descargando...';
+            }
+            try {
+                const resp = await fetch('/api/download?path=' + encodeURIComponent(filePath));
+                if (!resp.ok) {
+                    const err = await resp.json().catch(() => ({}));
+                    alert('Error al descargar: ' + (err.detail || 'archivo no encontrado'));
+                    if (btn) {
+                        btn.disabled = false;
+                        btn.textContent = '⬇ ' + filePath.split('/').pop();
+                    }
+                    return;
+                }
+                // Get filename from Content-Disposition
+                const cd = resp.headers.get('Content-Disposition') || '';
+                const match = cd.match(/filename="(.+)"/);
+                const filename = match ? match[1] : filePath.split('/').pop();
+                // Create blob and download
+                const blob = await resp.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+                if (btn) {
+                    btn.disabled = false;
+                    btn.textContent = '⬇ ' + filename;
+                }
+            } catch (err) {
+                alert('Error de conexión al descargar archivo');
+                if (btn) {
+                    btn.disabled = false;
+                    btn.textContent = '⬇ ' + filePath.split('/').pop();
+                }
+            }
         }
 
         async function sendMessage() {

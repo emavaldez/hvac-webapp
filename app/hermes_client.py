@@ -2,10 +2,13 @@
 Hermes API client — talks to the Hermes Gateway API Server.
 Uses the OpenAI-compatible /v1/chat/completions endpoint.
 Supports file attachments via multipart content.
+Supports file download via base64 encoding.
 """
 import httpx
 import json
 import base64
+import re
+from pathlib import Path
 from typing import Tuple, Optional
 from config import settings
 
@@ -58,6 +61,75 @@ async def send_message(
         return "", "No se pudo conectar con el agente"
     except (KeyError, json.JSONDecodeError):
         return "", "Respuesta inválida del agente"
+
+
+# --- File download via Hermes ---
+
+# Patterns: absolute paths and known extensions
+FILE_PATH_RE = re.compile(
+    r'(?:^|\s)((?:/[\w\-./]+)\.(?:xlsx|xls|csv|pdf|docx|doc|pptx|ppt|txt|json|yaml|yml|zip|png|jpg|jpeg|gif))',
+    re.IGNORECASE,
+)
+
+
+def extract_file_paths(text: str) -> list[str]:
+    """Extract file paths from agent response text."""
+    return list(dict.fromkeys(FILE_PATH_RE.findall(text)))  # dedup, preserve order
+
+
+async def download_file_from_hermes(
+    file_path: str, timeout: int = 120
+) -> Tuple[Optional[bytes], Optional[str], Optional[str]]:
+    """
+    Ask Hermes to read a file and return it base64-encoded.
+    Returns (content_bytes, filename, error_message).
+    """
+    headers = {
+        "Authorization": f"Bearer {settings.HERMES_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    body = {
+        "model": settings.HERMES_MODEL,
+        "messages": [
+            {
+                "role": "user",
+                "content": (
+                    f"Leé el archivo {file_path} en modo binario y devolvé SU CONTENIDO "
+                    f"completo codificado en base64. SOLO el base64, sin texto adicional, "
+                    f"sin markdown, sin explicaciones. Respondé únicamente con el string base64."
+                ),
+            }
+        ],
+        "stream": False,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.post(
+                f"{settings.HERMES_API_URL}/chat/completions",
+                headers=headers,
+                json=body,
+            )
+
+        if resp.status_code != 200:
+            return None, None, f"Error {resp.status_code} del agente"
+
+        data = resp.json()
+        content = data["choices"][0]["message"]["content"].strip()
+
+        # Strip markdown code fences if present
+        if content.startswith("```"):
+            content = re.sub(r"^```\w*\n?", "", content)
+            content = re.sub(r"\n?```$", "", content)
+            content = content.strip()
+
+        # Decode base64
+        file_bytes = base64.b64decode(content)
+        filename = Path(file_path).name
+        return file_bytes, filename, None
+
+    except Exception as e:
+        return None, None, f"No se pudo descargar el archivo: {str(e)}"
 
 
 async def send_message_with_files(

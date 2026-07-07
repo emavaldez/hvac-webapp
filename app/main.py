@@ -21,7 +21,7 @@ from pathlib import Path
 from config import settings
 from auth import verify_user, create_token, verify_token
 from database import init_db, save_message, get_history, clear_history
-from hermes_client import send_message, send_message_with_files
+from hermes_client import send_message, send_message_with_files, download_file_from_hermes, extract_file_paths
 
 app = FastAPI(title="HVAC Web App")
 
@@ -191,6 +191,33 @@ async def history(user: dict = Depends(require_user)):
 async def clear(user: dict = Depends(require_user)):
     clear_history(user["username"])
     return {"ok": True}
+
+
+@app.get("/api/download")
+async def download_file(
+    request: Request,
+    user: dict = Depends(require_user),
+):
+    """Download a file from the Hermes pod via base64 encoding."""
+    file_path = request.query_params.get("path", "")
+    if not file_path or not file_path.startswith("/"):
+        raise HTTPException(status_code=400, detail="Ruta de archivo inválida")
+
+    file_bytes, filename, error = await download_file_from_hermes(file_path)
+    if error:
+        raise HTTPException(status_code=502, detail=error)
+    if not file_bytes:
+        raise HTTPException(status_code=404, detail="Archivo no encontrado")
+
+    # Guess content type
+    import mimetypes
+    content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+
+    return Response(
+        content=file_bytes,
+        media_type=content_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.get("/api/health")
