@@ -82,6 +82,7 @@ async def download_file_from_hermes(
 ) -> Tuple[Optional[bytes], Optional[str], Optional[str]]:
     """
     Ask Hermes to read a file and return it base64-encoded.
+    Uses the agent's terminal tool to run base64 command directly.
     Returns (content_bytes, filename, error_message).
     """
     headers = {
@@ -94,9 +95,12 @@ async def download_file_from_hermes(
             {
                 "role": "user",
                 "content": (
-                    f"Leé el archivo {file_path} en modo binario y devolvé SU CONTENIDO "
-                    f"completo codificado en base64. SOLO el base64, sin texto adicional, "
-                    f"sin markdown, sin explicaciones. Respondé únicamente con el string base64."
+                    f"Necesito que leas el archivo binario {file_path} y me devuelvas su contenido "
+                    f"codificado en base64. Usá la herramienta terminal para ejecutar este comando "
+                    f"y pegame el output completo:\n\n"
+                    f"base64 \"{file_path}\"\n\n"
+                    f"Si el archivo no existe, decime 'FILE_NOT_FOUND'. "
+                    f"Pegame SOLO el output del comando base64, sin texto adicional."
                 ),
             }
         ],
@@ -117,11 +121,21 @@ async def download_file_from_hermes(
         data = resp.json()
         content = data["choices"][0]["message"]["content"].strip()
 
+        if "FILE_NOT_FOUND" in content:
+            return None, None, "Archivo no encontrado en el agente"
+
         # Strip markdown code fences if present
         if content.startswith("```"):
             content = re.sub(r"^```\w*\n?", "", content)
             content = re.sub(r"\n?```$", "", content)
             content = content.strip()
+
+        # Remove any leading/trailing non-base64 text
+        # base64 only contains A-Za-z0-9+/=
+        lines = content.split("\n")
+        b64_lines = [l.strip() for l in lines if re.match(r"^[A-Za-z0-9+/=\s]+$", l.strip())]
+        if b64_lines:
+            content = "".join(b64_lines)
 
         # Decode base64
         file_bytes = base64.b64decode(content)
