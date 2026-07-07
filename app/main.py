@@ -28,6 +28,9 @@ app = FastAPI(title="HVAC Web App")
 # In-memory store for file transfers from Hermes pod
 _transfer_store: dict = {}
 
+# Keep references to background tasks so they don't get cancelled
+_background_tasks: set = set()
+
 # Init DB on startup
 init_db()
 

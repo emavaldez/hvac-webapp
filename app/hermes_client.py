@@ -129,7 +129,13 @@ async def start_file_download(file_path: str) -> str:
             pass
 
     # Fire and forget — the task runs independently of the request
-    asyncio.create_task(fire_curl())
+    # Store reference to prevent garbage collection / cancellation
+    import asyncio
+    task = asyncio.create_task(fire_curl())
+    # Keep a global reference so the task isn't cancelled when the request ends
+    from main import _background_tasks
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
 
     return transfer_id
 
