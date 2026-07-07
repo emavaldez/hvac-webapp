@@ -383,17 +383,21 @@
             html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, (m, lang, code) => {
                 return `<pre>${code.trim()}</pre>`;
             });
-            // Inline code
-            html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+            // Inline code — check if it's a file path
+            html = html.replace(/`([^`]+)`/g, (m, code) => {
+                if (/^\/[\w\-./]+\.(xlsx|xls|csv|pdf|docx|doc|pptx|ppt|txt|json|yaml|yml|zip|png|jpg|jpeg|gif)$/i.test(code)) {
+                    return `<button class="dl-btn" onclick="downloadFile('${code}')">⬇ ${code.split('/').pop()}</button>`;
+                }
+                return `<code>${code}</code>`;
+            });
             // Bold
             html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
             // Links
             html = html.replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank">$1</a>');
-            // File paths → download buttons
+            // File paths in plain text → download buttons
             html = html.replace(
-                /(?:^|\s)(\/[\w\-./]+\.(?:xlsx|xls|csv|pdf|docx|doc|pptx|ppt|txt|json|yaml|yml|zip|png|jpg|jpeg|gif))/gi,
+                /(?:^|\s|&gt;)(\/[\w\-./]+\.(?:xlsx|xls|csv|pdf|docx|doc|pptx|ppt|txt|json|yaml|yml|zip|png|jpg|jpeg|gif))/gi,
                 (match, path) => {
-                    const encoded = encodeURIComponent(path);
                     return ` <button class="dl-btn" onclick="downloadFile('${path}')">⬇ ${path.split('/').pop()}</button>`;
                 }
             );
