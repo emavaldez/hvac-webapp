@@ -104,9 +104,9 @@ async def start_file_download(file_path: str) -> str:
     )
 
     prompt = (
-        f"Ejecutá este comando en la terminal y pegame el output:\n\n"
-        f"{curl_cmd}\n\n"
-        f"Pegame SOLO el output del curl."
+        f"Necesito que ejecutes este comando en la terminal AHORA MISMO y me pegues el output:\n\n"
+        f"```bash\n{curl_cmd}\n```\n\n"
+        f"Es un comando curl que sube un archivo. Ejecutalo y pegame el output."
     )
 
     body = {
@@ -115,18 +115,29 @@ async def start_file_download(file_path: str) -> str:
         "stream": False,
     }
 
+    from main import _transfer_store
+
     import asyncio
 
     async def fire_curl():
         try:
             async with httpx.AsyncClient(timeout=180) as client:
-                await client.post(
+                resp = await client.post(
                     f"{settings.HERMES_API_URL}/chat/completions",
                     headers=headers,
                     json=body,
                 )
-        except Exception:
-            pass
+                # Log result to transfer store for debugging
+                if resp.status_code != 200:
+                    _transfer_store[f"{transfer_id}_error"] = {
+                        "content": b"",
+                        "filename": f"error_{resp.status_code}",
+                    }
+        except Exception as e:
+            _transfer_store[f"{transfer_id}_error"] = {
+                "content": b"",
+                "filename": f"exception_{str(e)[:50]}",
+            }
 
     # Fire and forget — the task runs independently of the request
     # Store reference to prevent garbage collection / cancellation
