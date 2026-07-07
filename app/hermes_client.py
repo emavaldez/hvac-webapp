@@ -83,8 +83,7 @@ async def download_file_from_hermes(
 ) -> Tuple[Optional[bytes], Optional[str], Optional[str]]:
     """
     Download a file from the Hermes pod.
-    Strategy: ask the agent to run a command that uploads the file
-    to a temporary endpoint on the web app via curl.
+    Strategy: ask the agent to upload the file via curl to our /api/transfer endpoint.
     Returns (content_bytes, filename, error_message).
     """
     import uuid
@@ -94,8 +93,9 @@ async def download_file_from_hermes(
         "Content-Type": "application/json",
     }
 
-    # Generate a unique transfer ID
     transfer_id = str(uuid.uuid4())[:8]
+    filename = Path(file_path).name
+    webapp_url = os.getenv("WEBAPP_PUBLIC_URL", "https://hvac-webapp-manejamelo-prod.apps.nan.builders")
 
     async def ask_hermes(prompt: str) -> Optional[str]:
         body = {
@@ -117,41 +117,36 @@ async def download_file_from_hermes(
         except Exception:
             return None
 
-    filename = Path(file_path).name
-
-    # Ask Hermes to upload the file via curl to our temp endpoint
-    # The web app needs to be accessible from the Hermes pod
-    # We use the web app's public URL
-    webapp_url = os.getenv("WEBAPP_PUBLIC_URL", "https://hvac-webapp-manejamelo-prod.apps.nan.builders")
-
-    resp1 = await ask_hermes(
-        f"Ejecutá este comando en la terminal para subir un archivo:\n\n"
-        f'curl -s -X POST -F "file=@{file_path}" -F "transfer_id={transfer_id}" '
-        f'"{webapp_url}/api/transfer" -H "X-Transfer-Key: {transfer_id}"\n\n'
-        f"Pegame el output del curl."
-    )
-
-    if not resp1:
-        return None, None, "El agente no respondió"
-
-    # The file should now be available in our temp store
-    # Check if the transfer endpoint received it
-    # (The /api/transfer endpoint stores the file in memory keyed by transfer_id)
-    # We retrieve it from the in-memory store
-    from main import _transfer_store
+    # Fire the curl command to Hermes (don't wait for response)
     import asyncio
 
-    # Wait a bit for the transfer to complete (the curl might still be running)
-    for _ in range(10):
+    curl_cmd = (
+        f'curl -s -X POST '
+        f'-F "file=@{file_path}" '
+        f'-F "transfer_id={transfer_id}" '
+        f'-H "X-Transfer-Key: {transfer_id}" '
+        f'"{webapp_url}/api/transfer"'
+    )
+
+    prompt = (
+        f"Ejecutá este comando en la terminal y pegame el output:\n\n"
+        f"{curl_cmd}\n\n"
+        f"Pegame SOLO el output del curl."
+    )
+
+    # Fire and forget — don't wait for Hermes to respond
+    asyncio.create_task(ask_hermes(prompt))
+
+    # Poll the transfer store for up to 90 seconds
+    from main import _transfer_store
+
+    for _ in range(45):
         if transfer_id in _transfer_store:
-            break
+            file_data = _transfer_store.pop(transfer_id)
+            return file_data["content"], file_data["filename"], None
         await asyncio.sleep(2)
 
-    if transfer_id not in _transfer_store:
-        return None, None, "El agente no pudo subir el archivo"
-
-    file_data = _transfer_store.pop(transfer_id)
-    return file_data["content"], file_data["filename"], None
+    return None, None, "Timeout esperando la transferencia del archivo"
 
 
 async def send_message_with_files(
