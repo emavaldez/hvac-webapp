@@ -443,7 +443,9 @@
             }
             try {
                 // Step 1: start the download (get transfer_id)
-                const startResp = await fetch('/api/download?path=' + encodeURIComponent(filePath));
+                const startResp = await fetch('/api/download?path=' + encodeURIComponent(filePath), {
+                    headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('token') || '') }
+                });
                 if (!startResp.ok) {
                     const err = await startResp.json().catch(() => ({}));
                     alert('Error al iniciar descarga: ' + (err.detail || 'desconocido'));
