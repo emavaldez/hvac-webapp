@@ -442,33 +442,56 @@
                 btn.textContent = '⏳ Descargando...';
             }
             try {
-                const resp = await fetch('/api/download?path=' + encodeURIComponent(filePath));
-                if (!resp.ok) {
-                    const err = await resp.json().catch(() => ({}));
-                    alert('Error al descargar: ' + (err.detail || 'archivo no encontrado'));
-                    if (btn) {
-                        btn.disabled = false;
-                        btn.textContent = '⬇ ' + filePath.split('/').pop();
-                    }
+                // Step 1: start the download (get transfer_id)
+                const startResp = await fetch('/api/download?path=' + encodeURIComponent(filePath));
+                if (!startResp.ok) {
+                    const err = await startResp.json().catch(() => ({}));
+                    alert('Error al iniciar descarga: ' + (err.detail || 'desconocido'));
+                    if (btn) { btn.disabled = false; btn.textContent = '⬇ ' + filePath.split('/').pop(); }
                     return;
                 }
-                // Get filename from Content-Disposition
-                const cd = resp.headers.get('Content-Disposition') || '';
-                const match = cd.match(/filename="(.+)"/);
-                const filename = match ? match[1] : filePath.split('/').pop();
-                // Create blob and download
-                const blob = await resp.blob();
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = filename;
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                URL.revokeObjectURL(url);
+                const { transfer_id, filename } = await startResp.json();
+
+                // Step 2: poll for the file
+                let ready = false;
+                for (let i = 0; i < 60; i++) {
+                    await new Promise(r => setTimeout(r, 2000));
+                    const pollResp = await fetch('/api/transfer/status?id=' + transfer_id, {
+                        headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('token') || '') }
+                    });
+                    if (!pollResp.ok) continue;
+                    const data = await pollResp.json();
+                    if (data.status === 'ready') {
+                        // Decode base64 and trigger download
+                        const byteChars = atob(data.data);
+                        const byteArrays = [];
+                        for (let j = 0; j < byteChars.length; j += 8192) {
+                            const slice = byteChars.slice(j, j + 8192);
+                            const byteNumbers = new Array(slice.length);
+                            for (let k = 0; k < slice.length; k++) {
+                                byteNumbers[k] = slice.charCodeAt(k);
+                            }
+                            byteArrays.push(new Uint8Array(byteNumbers));
+                        }
+                        const blob = new Blob(byteArrays, { type: data.content_type });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = data.filename;
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                        URL.revokeObjectURL(url);
+                        ready = true;
+                        break;
+                    }
+                }
+                if (!ready) {
+                    alert('Timeout: el agente tardó demasiado en subir el archivo');
+                }
                 if (btn) {
                     btn.disabled = false;
-                    btn.textContent = '⬇ ' + filename;
+                    btn.textContent = '⬇ ' + (filename || filePath.split('/').pop());
                 }
             } catch (err) {
                 alert('Error de conexión al descargar archivo');

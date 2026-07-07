@@ -78,13 +78,11 @@ def extract_file_paths(text: str) -> list[str]:
     return list(dict.fromkeys(FILE_PATH_RE.findall(text)))  # dedup, preserve order
 
 
-async def download_file_from_hermes(
-    file_path: str, timeout: int = 120
-) -> Tuple[Optional[bytes], Optional[str], Optional[str]]:
+async def start_file_download(file_path: str) -> str:
     """
-    Download a file from the Hermes pod.
-    Strategy: ask the agent to upload the file via curl to our /api/transfer endpoint.
-    Returns (content_bytes, filename, error_message).
+    Start a file download from the Hermes pod.
+    Asks the agent to upload the file via curl to our /api/transfer endpoint.
+    Returns the transfer_id immediately (does not wait for the file).
     """
     import uuid
 
@@ -94,32 +92,9 @@ async def download_file_from_hermes(
     }
 
     transfer_id = str(uuid.uuid4())[:8]
-    filename = Path(file_path).name
     webapp_url = os.getenv("WEBAPP_PUBLIC_URL", "https://hvac-webapp-manejamelo-prod.apps.nan.builders")
 
-    async def ask_hermes(prompt: str) -> Optional[str]:
-        body = {
-            "model": settings.HERMES_MODEL,
-            "messages": [{"role": "user", "content": prompt}],
-            "stream": False,
-        }
-        try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                resp = await client.post(
-                    f"{settings.HERMES_API_URL}/chat/completions",
-                    headers=headers,
-                    json=body,
-                )
-            if resp.status_code != 200:
-                return None
-            data = resp.json()
-            return data["choices"][0]["message"]["content"].strip()
-        except Exception:
-            return None
-
-    # Fire the curl command to Hermes (don't wait for response)
-    import asyncio
-
+    # Build the curl command for the agent to execute
     curl_cmd = (
         f'curl -s -X POST '
         f'-F "file=@{file_path}" '
@@ -134,19 +109,29 @@ async def download_file_from_hermes(
         f"Pegame SOLO el output del curl."
     )
 
-    # Fire and forget — don't wait for Hermes to respond
-    asyncio.create_task(ask_hermes(prompt))
+    body = {
+        "model": settings.HERMES_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "stream": False,
+    }
 
-    # Poll the transfer store for up to 90 seconds
-    from main import _transfer_store
+    import asyncio
 
-    for _ in range(45):
-        if transfer_id in _transfer_store:
-            file_data = _transfer_store.pop(transfer_id)
-            return file_data["content"], file_data["filename"], None
-        await asyncio.sleep(2)
+    async def fire_curl():
+        try:
+            async with httpx.AsyncClient(timeout=180) as client:
+                await client.post(
+                    f"{settings.HERMES_API_URL}/chat/completions",
+                    headers=headers,
+                    json=body,
+                )
+        except Exception:
+            pass
 
-    return None, None, "Timeout esperando la transferencia del archivo"
+    # Fire and forget — the task runs independently of the request
+    asyncio.create_task(fire_curl())
+
+    return transfer_id
 
 
 async def send_message_with_files(

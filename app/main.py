@@ -21,7 +21,7 @@ from pathlib import Path
 from config import settings
 from auth import verify_user, create_token, verify_token
 from database import init_db, save_message, get_history, clear_history
-from hermes_client import send_message, send_message_with_files, download_file_from_hermes, extract_file_paths
+from hermes_client import send_message, send_message_with_files, start_file_download, extract_file_paths
 
 app = FastAPI(title="HVAC Web App")
 
@@ -201,31 +201,36 @@ async def download_file(
     request: Request,
     user: dict = Depends(require_user),
 ):
-    """Download a file from the Hermes pod via curl transfer."""
-    import logging
-    logger = logging.getLogger("hvac-webapp")
-
+    """Start a file download from the Hermes pod. Returns transfer_id for polling."""
     file_path = request.query_params.get("path", "")
-    logger.info(f"Download request from {user['username']}: path={file_path}")
     if not file_path or not file_path.startswith("/"):
         raise HTTPException(status_code=400, detail="Ruta de archivo inválida")
 
-    file_bytes, filename, error = await download_file_from_hermes(file_path)
-    logger.info(f"Download result: bytes={len(file_bytes) if file_bytes else 0}, filename={filename}, error={error}")
-    if error:
-        raise HTTPException(status_code=502, detail=error)
-    if not file_bytes:
-        raise HTTPException(status_code=404, detail="Archivo no encontrado")
+    transfer_id = await start_file_download(file_path)
+    return {"transfer_id": transfer_id, "filename": Path(file_path).name}
 
-    # Guess content type
+
+@app.get("/api/transfer/status")
+async def transfer_status(
+    request: Request,
+    user: dict = Depends(require_user),
+):
+    """Check if a file transfer has completed. Returns file as base64 if ready."""
+    transfer_id = request.query_params.get("id", "")
+    if not transfer_id or transfer_id not in _transfer_store:
+        return {"status": "pending"}
+
+    file_data = _transfer_store.pop(transfer_id)
+    import base64
     import mimetypes
-    content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
-
-    return Response(
-        content=file_bytes,
-        media_type=content_type,
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-    )
+    content_type = mimetypes.guess_type(file_data["filename"])[0] or "application/octet-stream"
+    b64 = base64.b64encode(file_data["content"]).decode()
+    return {
+        "status": "ready",
+        "filename": file_data["filename"],
+        "content_type": content_type,
+        "data": b64,
+    }
 
 
 @app.get("/api/health")
