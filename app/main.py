@@ -201,12 +201,17 @@ async def download_file(
     request: Request,
     user: dict = Depends(require_user),
 ):
-    """Download a file from the Hermes pod via base64 encoding."""
+    """Download a file from the Hermes pod via curl transfer."""
+    import logging
+    logger = logging.getLogger("hvac-webapp")
+
     file_path = request.query_params.get("path", "")
+    logger.info(f"Download request from {user['username']}: path={file_path}")
     if not file_path or not file_path.startswith("/"):
         raise HTTPException(status_code=400, detail="Ruta de archivo inválida")
 
     file_bytes, filename, error = await download_file_from_hermes(file_path)
+    logger.info(f"Download result: bytes={len(file_bytes) if file_bytes else 0}, filename={filename}, error={error}")
     if error:
         raise HTTPException(status_code=502, detail=error)
     if not file_bytes:
@@ -225,7 +230,7 @@ async def download_file(
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok"}
+    return {"status": "ok", "transfers": list(_transfer_store.keys())}
 
 
 @app.post("/api/transfer")
