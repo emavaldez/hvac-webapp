@@ -120,24 +120,27 @@ async def start_file_download(file_path: str) -> str:
     import asyncio
 
     async def fire_curl():
-        try:
-            async with httpx.AsyncClient(timeout=180) as client:
-                resp = await client.post(
-                    f"{settings.HERMES_API_URL}/chat/completions",
-                    headers=headers,
-                    json=body,
-                )
-                # Log result to transfer store for debugging
-                if resp.status_code != 200:
-                    _transfer_store[f"{transfer_id}_error"] = {
-                        "content": b"",
-                        "filename": f"error_{resp.status_code}",
-                    }
-        except Exception as e:
-            _transfer_store[f"{transfer_id}_error"] = {
-                "content": b"",
-                "filename": f"exception_{str(e)[:50]}",
-            }
+        import threading
+        def do_curl():
+            try:
+                with httpx.Client(timeout=180) as client:
+                    resp = client.post(
+                        f"{settings.HERMES_API_URL}/chat/completions",
+                        headers=headers,
+                        json=body,
+                    )
+                    if resp.status_code != 200:
+                        _transfer_store[f"{transfer_id}_error"] = {
+                            "content": b"",
+                            "filename": f"error_{resp.status_code}",
+                        }
+            except Exception as e:
+                _transfer_store[f"{transfer_id}_error"] = {
+                    "content": b"",
+                    "filename": f"exception_{str(e)[:50]}",
+                }
+        t = threading.Thread(target=do_curl, daemon=True)
+        t.start()
 
     # Fire and forget — the task runs independently of the request
     # Store reference to prevent garbage collection / cancellation
